@@ -29,6 +29,7 @@ const (
 	YAML Format = "yaml"
 	CSV  Format = "csv"
 	XML  Format = "xml"
+	ZIP  Format = "zip"
 )
 
 // FormatFromStrings returns the first non-empty Format from the given strings.
@@ -62,6 +63,8 @@ func FormatFromString(formatStr string) Format {
 		return CSV
 	case "xml":
 		return XML
+	case "zip":
+		return ZIP
 	}
 
 	return ""

@@ -14,11 +14,14 @@
 package metadecoders
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -195,6 +198,8 @@ func (d Decoder) UnmarshalTo(data []byte, f Format, v any) error {
 		}
 	case CSV:
 		return d.unmarshalCSV(data, v)
+	case ZIP:
+		return d.unmarshalZIP(data, v)
 
 	default:
 		return fmt.Errorf("unmarshal of format %q is not supported", f)
@@ -315,4 +320,75 @@ func stringifyMapKeys(in any) (any, bool) {
 	}
 
 	return nil, false
+}
+
+func (d Decoder) unmarshalZIP(data []byte, v any) error {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return err
+	}
+
+	tree := map[string]any{}
+	for _, zf := range zr.File {
+		stem := path.Base(zf.Name)
+		stem = stem[:len(stem)-len(path.Ext(stem))]
+		if stem == "" {
+			// File name without the extension is used as a key, so it cannot be
+			// empty.
+			continue
+		}
+
+		format := FormatFromString(zf.Name)
+		if format == "" {
+			// Skip files with no decodable format. This will also skip
+			// directories.
+			continue
+		}
+
+		file, err := zr.Open(zf.Name)
+		if err != nil {
+			continue
+		}
+		content, err := io.ReadAll(file)
+		file.Close()
+		if err != nil {
+			continue
+		}
+
+		// Decode recursively.
+		result, err := d.Unmarshal(content, format)
+		if err != nil {
+			continue
+		}
+
+		// Merge result into tree by drilling down based on directory path.
+		parent := tree
+		if dir := path.Dir(zf.Name); dir != "." {
+			for _, key := range strings.Split(dir, "/") {
+				if key != "" {
+					switch value := parent[key].(type) {
+					case map[string]any:
+						parent = value
+					default:
+						// Override existing non-map with map. That is, files
+						// that appear later in the archive take precedence.
+						next := map[string]any{}
+						parent[key] = next
+						parent = next
+					}
+				}
+			}
+		}
+		parent[stem] = result
+	}
+
+	switch vv := v.(type) {
+	case *map[string]any:
+		*vv = tree
+	case *any:
+		*vv = tree
+	default:
+		return fmt.Errorf("ZIP cannot be unmarshaled into %T", v)
+	}
+	return nil
 }
